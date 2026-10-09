@@ -63,7 +63,7 @@ st.write("---")
 # Inform the developer that the system is running automatically
 st.info("⏰ **Automation Active:** A background python daemon is running 24/7. It generates a new batch of 100 records automatically every hour.")
 
-col_btn1, _ = st.columns()
+col_btn1, _ = st.columns(2)
 with col_btn1:
     if st.button("🚀 Manually Force Extra Batch Entry"):
         current_logs = load_history_logs()
