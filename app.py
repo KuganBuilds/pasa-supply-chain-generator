@@ -1,17 +1,18 @@
 import streamlit as st
 import pandas as pd
 import altair as alt
-from datetime import datetime, timedelta
 import json
 import os
+import time
+import threading
+from datetime import datetime, timedelta
 from generator import generate_hourly_batch
 
 METRICS_LOG_FILE = "generation_history_log.json"
 
 st.set_page_config(page_title="PASA Data Quality Center", layout="wide")
 
-# Force an elegant Dark-Tech UI Color Override
-# Force an elegant Dark-Tech UI Color Override
+# Theme style override
 st.markdown("""
     <style>
         .stApp { background-color: #0E1117; color: #E0E0E0; }
@@ -19,8 +20,7 @@ st.markdown("""
         .stButton>button { background-color: #1F2937; color: white; border: 1px solid #3B82F6; border-radius: 6px; }
         .stButton>button:hover { background-color: #3B82F6; color: white; }
     </style>
-""", unsafe_allow_html=True) # <-- Changed from unsafe_index=True
-
+""", unsafe_allow_html=True)
 
 def load_history_logs():
     if os.path.exists(METRICS_LOG_FILE):
@@ -32,13 +32,40 @@ def append_history_log(metrics):
     logs.append(metrics)
     with open(METRICS_LOG_FILE, "w") as f: json.dump(logs, f, indent=4)
 
+# ================= BACKGROUND SCHEDULER SYSTEM =================
+def run_hourly_scheduler():
+    """Background thread function that runs continuously inside the cloud container."""
+    while True:
+        current_time = datetime.utcnow()
+        # Trigger on the hour mark (e.g., 01:00, 02:00)
+        if current_time.minute == 0:
+            metrics, _, _, _ = generate_hourly_batch(current_time)
+            append_history_log(metrics)
+            # Sleep for 65 seconds to step safely out of the current minute mark windows
+            time.sleep(65)
+        # Sleep short intervals to keep checks accurate without destroying CPU capacity
+        time.sleep(10)
+
+# Initialize the automated daemon loop if it hasn't started yet
+if "scheduler_started" not in st.session_state:
+    st.session_state["scheduler_started"] = True
+    # Look for existing active background threads to avoid duplicate tasks
+    thread_exists = any(t.name == "PASA_Hourly_Engine" for t in threading.enumerate())
+    if not thread_exists:
+        bg_thread = threading.Thread(target=run_hourly_scheduler, name="PASA_Hourly_Engine", daemon=True)
+        bg_thread.start()
+# ===============================================================
+
 st.title("🏭 PASA Production Pipeline Dashboard")
-st.markdown("### `pasa_supply_chain` // Data Drift & Duplication Operational Terminal")
+st.markdown("### `pasa_supply_chain` // Automated 24/7 Data Drift & Duplication Operational Terminal")
 st.write("---")
 
-col_btn1, _ = st.columns([2, 5])
+# Inform the developer that the system is running automatically
+st.info("⏰ **Automation Active:** A background python daemon is running 24/7. It generates a new batch of 100 records automatically every hour.")
+
+col_btn1, _ = st.columns()
 with col_btn1:
-    if st.button("🚀 Trigger Next Hourly Batch Execution"):
+    if st.button("🚀 Manually Force Extra Batch Entry"):
         current_logs = load_history_logs()
         if not current_logs:
             for i in range(8, 0, -1):
@@ -47,7 +74,7 @@ with col_btn1:
                 append_history_log(m)
         metrics, _, _, _ = generate_hourly_batch()
         append_history_log(metrics)
-        st.success("Batch successfully committed!")
+        st.success("Manual override batch committed!")
 
 history_data = load_history_logs()
 
@@ -55,7 +82,6 @@ if history_data:
     df_history = pd.DataFrame(history_data)
     latest_run = history_data[-1]
     
-    # Summary Metrics Cards
     kpi1, kpi2, kpi3, kpi4 = st.columns(4)
     kpi1.metric("Total Rows Ingested", f"{latest_run['total_generated']} rows")
     kpi2.metric("Clean Records (Good)", f"{latest_run['good_records']} rows")
@@ -64,7 +90,6 @@ if history_data:
     
     st.write("---")
     
-    # Chart 1: Altair Grouped Side-by-Side Clean vs Bad volume Chart
     st.markdown("#### 📈 Chronological Hourly Ingestion Volume")
     df_melted_vol = df_history.melt(id_vars=["timestamp"], value_vars=["good_records", "bad_records"], 
                                     var_name="Data Type", value_name="Record Count")
@@ -75,10 +100,8 @@ if history_data:
         color=alt.Color("Data Type:N", scale=alt.Scale(domain=["good_records", "bad_records"], range=["#10B981", "#EF4444"])),
         xOffset="Data Type:N"
     ).properties(height=350).interactive()
-    
     st.altair_chart(vol_chart, use_container_width=True)
     
-    # Chart 2: Structural Breakdown of System Issues
     st.markdown("#### 🔬 Detailed Structural Issue Breakdown (Nulls, Drift & Duplicates)")
     df_melted_drift = df_history.melt(id_vars=["timestamp"], value_vars=["null_injected", "formatting_drift_injected", "duplicates_injected"],
                                      var_name="Anomaly Type", value_name="Incident Count")
@@ -89,11 +112,11 @@ if history_data:
         color=alt.Color("Anomaly Type:N", scale=alt.Scale(range=["#3B82F6", "#F59E0B", "#EC4899"])),
         tooltip=["timestamp", "Anomaly Type", "Incident Count"]
     ).properties(height=350).interactive()
-    
     st.altair_chart(drift_chart, use_container_width=True)
     
     st.write("---")
     st.markdown("#### 📄 Audit Log Extract")
     st.dataframe(df_history.tail(5), use_container_width=True)
 else:
-    st.warning("⚠️ No metadata logs found. Trigger a batch execution above to view analytics visualization metrics.")
+    st.warning("⚠️ No metadata logs found. Trigger a batch execution above to start.")
+
