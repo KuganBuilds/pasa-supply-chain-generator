@@ -1,2 +1,4 @@
 pandas
 altair
+azure-storage-blob
+azure-identity
